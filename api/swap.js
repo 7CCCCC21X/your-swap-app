@@ -9,7 +9,7 @@ export default async function handler(req, res) {
     if (chain !== 'bsc') throw new Error('当前 Demo 仅支持 BSC');
 
     /* ---------- 1. 获取报价 ---------- */
-    const quoteUrl = 'https://web3.okx.com/api/v5/dex/aggregator/quote';
+    const quoteUrl = 'https://www.okx.com/api/v5/dex/aggregator/quote';
     const { data } = await axios.get(quoteUrl, {
       params: {
         chainId: 56,
