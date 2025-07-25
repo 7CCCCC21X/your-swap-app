@@ -1,11 +1,7 @@
 {
   "version": 2,
-  "builds": [
-    { "src": "api/**/*.js", "use": "@vercel/node" },
-    { "src": "public/**", "use": "@vercel/static" }
-  ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    { "src": "/(.*)", "dest": "/public/index.html" }
+    { "handle": "filesystem" },          // 先匹配静态文件和 API 函数
+    { "src": "/(.*)", "dest": "/index.html" }   // 其余全部回落到前端单页
   ]
 }
