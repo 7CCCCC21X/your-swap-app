@@ -1,0 +1,51 @@
+import 'dotenv/config'
+import express from 'express'
+import cors    from 'cors'
+import axios   from 'axios'
+import { ethers } from 'ethers'
+
+const app = express()
+app.use(cors())                 // 给返回加上 ACAO: *
+app.use(express.json())
+
+/* ---------- POST /api/swap ---------- */
+app.post('/api/swap', async (req, res) => {
+  try {
+    const { chain, privateKey, amountIn, fromToken, toToken, slippage } = req.body
+    if (chain !== 'bsc') throw new Error('暂只示例 BSC')
+
+    /* 1. 向 OKX Quote 接口拿路由 */
+    const { data } = await axios.get('https://web3.okx.com/api/v5/dex/aggregator/quote', {
+      params: {
+        chainId: 56,
+        fromTokenAddress: fromToken,
+        toTokenAddress:   toToken,
+        amount:          amountIn,
+        slippage,
+        userWalletAddress: ethers.computeAddress(privateKey)
+      }
+    })
+    if (data.code !== '00000') throw new Error(data.msg)
+
+    const q = data.data                       // OKX 返回字段
+    /* 2. 若 tokenIn 为 ERC‑20，先检查/approve …… */
+
+    /* 3. 发送签名交易 */
+    const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC)
+    const wallet   = new ethers.Wallet(privateKey, provider)
+
+    const tx = await wallet.sendTransaction({
+      to:    q.routerAddress,
+      data:  q.data,
+      value: q.value,
+      gasLimit: q.gasLimit || 500_000
+    })
+    await tx.wait(1)
+
+    res.json({ txHash: tx.hash, chain })
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.listen(8080, () => console.log('API up http://localhost:8080'))
