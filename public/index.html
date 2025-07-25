@@ -1,51 +1,140 @@
-import 'dotenv/config'
-import express from 'express'
-import cors    from 'cors'
-import axios   from 'axios'
-import { ethers } from 'ethers'
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>多链批量兑换 · OKX Web3</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --bg:#f9f9f9;--card:#fff;--text:#1f2937;--sub:#6b7280;--primary:#2563eb;
+  --ok:#16a34a;--err:#dc2626
+}
+@media(prefers-color-scheme:dark){
+  :root{--bg:#111827;--card:#1f2937;--text:#e2e8f0;--sub:#94a3b8}
+}
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,Segoe UI,PingFang SC,Helvetica,Arial,sans-serif}
+body{background:var(--bg);color:var(--text);min-height:100vh;display:flex;justify-content:center;padding:24px}
+.card{background:var(--card);width:100%;max-width:880px;border-radius:12px;box-shadow:0 4px 12px rgb(0 0 0/.08);padding:24px}
+h1{font-size:1.5rem;margin-bottom:12px;text-align:center}
+label{display:block;margin:12px 0 6px;color:var(--sub);font-size:.875rem}
+textarea,input,select{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:.875rem}
+button{margin-top:16px;padding:10px 20px;font-size:.875rem;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;transition:.2s}
+button:hover{background:#1e46c5}
+button:disabled{opacity:.6;cursor:default}
+table{width:100%;border-collapse:collapse;margin-top:20px;font-size:.8rem}
+th,td{text-align:left;padding:6px;border-bottom:1px solid #e5e7eb}
+.status-ok{color:var(--ok)} .status-err{color:var(--err)}
+.progress{width:100%;height:6px;background:#e5e7eb;border-radius:6px;margin-top:12px;overflow:hidden}
+.progress div{height:100%;background:var(--primary);transition:.3s;width:0}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>多链批量兑换工具</h1>
 
-const app = express()
-app.use(cors())                 // 给返回加上 ACAO: *
-app.use(express.json())
+  <label>选择网络</label>
+  <select id="network">
+    <option value="bsc">BSC</option>
+    <option value="sol">Solana</option>
+    <option value="arb">Arbitrum</option>
+    <option value="sui">Sui</option>
+    <option value="base">Base</option>
+    <option value="apt">Aptos</option>
+  </select>
 
-/* ---------- POST /api/swap ---------- */
-app.post('/api/swap', async (req, res) => {
-  try {
-    const { chain, privateKey, amountIn, fromToken, toToken, slippage } = req.body
-    if (chain !== 'bsc') throw new Error('暂只示例 BSC')
+  <label>From Token (地址或原生币符号)</label>
+  <input id="fromToken" placeholder="0xA0b8… 或 ETH">
 
-    /* 1. 向 OKX Quote 接口拿路由 */
-    const { data } = await axios.get('https://web3.okx.com/api/v5/dex/aggregator/quote', {
-      params: {
-        chainId: 56,
-        fromTokenAddress: fromToken,
-        toTokenAddress:   toToken,
-        amount:          amountIn,
-        slippage,
-        userWalletAddress: ethers.computeAddress(privateKey)
-      }
-    })
-    if (data.code !== '00000') throw new Error(data.msg)
+  <label>To Token (地址或原生币符号)</label>
+  <input id="toToken" placeholder="0xC02a… 或 WBNB">
 
-    const q = data.data                       // OKX 返回字段
-    /* 2. 若 tokenIn 为 ERC‑20，先检查/approve …… */
+  <label>滑点容忍度 (填 0.005 = 0.5%)</label>
+  <input id="slippage" value="0.005">
 
-    /* 3. 发送签名交易 */
-    const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC)
-    const wallet   = new ethers.Wallet(privateKey, provider)
+  <label>统一兑换数量 (可选，留空则使用每行填写的数量，单位 = fromToken 最小精度)</label>
+  <input id="fixedAmount" placeholder="例如 1000000">
 
-    const tx = await wallet.sendTransaction({
-      to:    q.routerAddress,
-      data:  q.data,
-      value: q.value,
-      gasLimit: q.gasLimit || 500_000
-    })
-    await tx.wait(1)
+  <label>私钥 , 数量 —— 每行一个 (英文逗号分隔)</label>
+  <textarea id="batch" rows="7" placeholder="0xabc...123,1000000
+0xdef...456,500000"></textarea>
 
-    res.json({ txHash: tx.hash, chain })
-  } catch (e) {
-    res.status(400).json({ error: e.message })
+  <button id="swapBtn">开始批量兑换</button>
+
+  <div class="progress" id="progressBar" hidden><div></div></div>
+
+  <table id="resultTable" hidden>
+    <thead><tr><th>#</th><th>地址</th><th>数量</th><th>Tx / 错误</th><th>状态</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+const $ = id => document.getElementById(id)
+const btn   = $('swapBtn')
+const bar   = $('progressBar')
+const fill  = bar.querySelector('div')
+const table = $('resultTable')
+const tbody = table.querySelector('tbody')
+
+btn.onclick = async () => {
+  const lines = $('batch').value.trim().split(/\n+/).filter(l => l.includes(','))
+  if (!lines.length) { alert('请按“私钥,数量”格式输入'); return }
+
+  const fixed = $('fixedAmount').value.trim()
+  btn.disabled = true; btn.textContent = '执行中…'; bar.hidden = false; fill.style.width = '0'; tbody.innerHTML = ''
+
+  const total = lines.length; let done = 0
+
+  for (const [i, line] of lines.entries()) {
+    let [pk, amt] = line.split(',').map(s => s.trim())
+    if (fixed) amt = fixed                            // 统一数量覆盖
+
+    const row = tbody.insertRow()
+    row.insertCell().textContent = i + 1
+    row.insertCell().textContent = pk.slice(0, 6) + '…' + pk.slice(-4)
+    row.insertCell().textContent = amt
+    const txCell = row.insertCell(), stCell = row.insertCell()
+
+    try {
+      const res = await fetch('/api/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chain:      $('network').value,
+          privateKey: pk,
+          amountIn:   amt,
+          fromToken:  $('fromToken').value,
+          toToken:    $('toToken').value,
+          slippage:   $('slippage').value
+        })
+      })
+      const json = await res.json()
+      if (!res.ok || json.error) throw new Error(json.error || 'API error')
+      const link = explorer(json.chain || $('network').value, json.txHash)
+      txCell.innerHTML = `<a href="${link}" target="_blank">${json.txHash.slice(0, 12)}…</a>`
+      stCell.textContent = '成功'; stCell.className = 'status-ok'
+    } catch (e) {
+      txCell.textContent = e.message
+      stCell.textContent = '失败'; stCell.className = 'status-err'
+    } finally {
+      done++; fill.style.width = `${(done / total) * 100}%`
+    }
   }
-})
+  table.hidden = false
+  btn.disabled = false; btn.textContent = '完成'
+}
 
-app.listen(8080, () => console.log('API up http://localhost:8080'))
+function explorer(chain, hash) {
+  switch (chain) {
+    case 'bsc' : return `https://bscscan.com/tx/${hash}`
+    case 'arb' : return `https://arbiscan.io/tx/${hash}`
+    case 'base': return `https://basescan.org/tx/${hash}`
+    case 'sol' : return `https://solscan.io/tx/${hash}`
+    case 'sui' : return `https://explorer.sui.io/txblock/${hash}`
+    case 'apt' : return `https://explorer.aptoslabs.com/txn/${hash}`
+    default    : return '#'
+  }
+}
+</script>
+</body>
+</html>
