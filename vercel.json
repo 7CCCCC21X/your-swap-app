@@ -1,7 +1,7 @@
 {
   "version": 2,
   "routes": [
-    { "handle": "filesystem" },          // 先匹配静态文件和 API 函数
-    { "src": "/(.*)", "dest": "/index.html" }   // 其余全部回落到前端单页
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
